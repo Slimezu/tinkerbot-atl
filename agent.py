@@ -1,5 +1,7 @@
 import os
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from livekit.agents import (
     AutoSubscribe,
@@ -9,11 +11,39 @@ from livekit.agents import (
     cli,
     llm,
 )
-from livekit.agents.pipeline import VoicePipelineAgent
+try:
+    from livekit.agents.voice import VoicePipelineAgent
+except ImportError:
+    try:
+        from livekit.agents.pipeline import VoicePipelineAgent
+    except ImportError:
+        from livekit.agents import VoicePipelineAgent
 from livekit.plugins import google, silero
 
 load_dotenv()
 logger = logging.getLogger("tinkerbot-agent")
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"status":"healthy","agent":"Tinkerbot ATL Mentor"}')
+
+    def log_message(self, format, *args):
+        pass # suppress periodic healthcheck log spam
+
+def start_health_server():
+    port_str = os.environ.get("PORT")
+    if port_str:
+        try:
+            port = int(port_str)
+            server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            logger.info(f"Health check server listening on 0.0.0.0:{port}")
+        except Exception as e:
+            logger.warning(f"Could not start health check server: {e}")
 
 SYSTEM_INSTRUCTION = """You are Tinkerbot, an AI mentor for Atal Tinkering Lab (ATL). You were created by Mohammad Daniyal Ahmad and Ridith Shetty. You are a hardware assistant and circuit troubleshooter for students (mostly school age, grades 6-12) who work with Arduino, ESP32, Raspberry Pi, sensors, motors, batteries and basic electronics.
 
@@ -56,6 +86,7 @@ async def entrypoint(ctx: JobContext):
     )
 
 if __name__ == "__main__":
+    start_health_server()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
