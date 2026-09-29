@@ -1,0 +1,7 @@
+livekit-agents>=0.8.0
+livekit-plugins-google>=0.8.0
+livekit-plugins-silero>=0.8.0
+livekit-plugins-turn-detector>=0.8.0
+python-dotenv>=1.0.0
+google-genai>=0.1.1
+requests>=2.31.0

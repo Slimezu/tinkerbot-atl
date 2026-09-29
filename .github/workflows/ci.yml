@@ -1,0 +1,68 @@
+name: TinkerBot CI & GGUF Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Compile and Validate Python Files
+        run: |
+          echo "Compiling Python agent and scripts for syntax errors..."
+          python -m py_compile agent.py
+          python -m py_compile scripts/download_gguf.py
+          echo "Python files compiled successfully!"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Node Dependencies
+        run: npm ci || npm install
+
+      - name: Lint and Test TypeScript / React Build
+        run: |
+          npm run lint
+          npm run build
+
+      - name: Cache GGUF Model
+        id: cache-gguf
+        uses: actions/cache@v4
+        with:
+          path: public/Slack.gguf
+          key: ${{ runner.os }}-slack-gguf-v1
+
+      - name: Download and Install Slack.gguf (if not cached)
+        if: steps.cache-gguf.outputs.cache-hit != 'true'
+        run: |
+          echo "Slack.gguf not found in cache. Starting download..."
+          mkdir -p public
+          python scripts/download_gguf.py || curl -L "https://huggingface.co/slimezu/Slack/resolve/main/Slack.gguf" -o public/Slack.gguf
+          ls -lh public/Slack.gguf
+          echo "Slack.gguf installed successfully!"
+
+      - name: Verify Dockerfile Build
+        run: |
+          docker build -t tinkerbot-agent:latest .
