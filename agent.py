@@ -11,13 +11,22 @@ from livekit.agents import (
     cli,
     llm,
 )
+USE_AGENT_SESSION = False
 try:
-    from livekit.agents.voice import VoicePipelineAgent
+    from livekit.agents import AgentSession, Agent
+    USE_AGENT_SESSION = True
 except ImportError:
     try:
-        from livekit.agents.pipeline import VoicePipelineAgent
+        from livekit.agents.voice import AgentSession, Agent
+        USE_AGENT_SESSION = True
     except ImportError:
-        from livekit.agents import VoicePipelineAgent
+        try:
+            from livekit.agents.voice import VoicePipelineAgent
+        except ImportError:
+            try:
+                from livekit.agents.pipeline import VoicePipelineAgent
+            except ImportError:
+                from livekit.agents import VoicePipelineAgent
 from livekit.plugins import google, silero
 
 load_dotenv()
@@ -57,33 +66,62 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"Connecting to room: {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    # Initialize Gemini-powered Voice Pipeline
-    initial_ctx = llm.ChatContext().append(
-        role="system",
-        text=SYSTEM_INSTRUCTION,
-    )
+    vad_instance = ctx.proc.userdata.get("vad")
+    if vad_instance is None:
+        try:
+            vad_instance = silero.VAD.load()
+        except Exception:
+            vad_instance = None
 
-    participant = await ctx.wait_for_participant()
-    logger.info(f"Starting voice session with participant: {participant.identity}")
+    if USE_AGENT_SESSION:
+        logger.info("Initializing LiveKit 1.8 AgentSession with Gemini...")
+        agent = Agent(
+            instructions=SYSTEM_INSTRUCTION,
+        )
+        session_kwargs = {
+            "stt": google.STT(),
+            "llm": google.LLM(
+                model="gemini-2.5-flash",
+                temperature=0.6,
+            ),
+            "tts": google.TTS(),
+        }
+        if vad_instance:
+            session_kwargs["vad"] = vad_instance
 
-    # Use Google Gemini LLM and Speech synthesis
-    agent = VoicePipelineAgent(
-        vad=ctx.proc.userdata["vad"],
-        stt=google.STT(),
-        llm=google.LLM(
-            model="gemini-2.5-flash",
-            temperature=0.6,
-        ),
-        tts=google.TTS(),
-        chat_ctx=initial_ctx,
-    )
+        session = AgentSession(**session_kwargs)
+        await session.start(room=ctx.room, agent=agent)
+        try:
+            await session.say(
+                "Hello! I am Tinkerbot, your ATL hardware lab mentor, created by Mohammad Daniyal Ahmad and Ridith Shetty. What circuit or microcontroller are you working on today?",
+                allow_interruptions=True,
+            )
+        except Exception as e:
+            logger.info(f"Greeting dispatch note: {e}")
+    else:
+        logger.info("Initializing legacy VoicePipelineAgent...")
+        initial_ctx = llm.ChatContext().append(
+            role="system",
+            text=SYSTEM_INSTRUCTION,
+        )
+        participant = await ctx.wait_for_participant()
+        logger.info(f"Starting voice session with participant: {participant.identity}")
 
-    agent.start(ctx.room, participant)
-
-    await agent.say(
-        "Hello! I am TinkerBot, your ATL hardware lab assistant, created by Mohammad Daniyal Ahmad and Ridith Shetty. What circuit or microcontroller are you working on today?",
-        allow_interruptions=True,
-    )
+        agent = VoicePipelineAgent(
+            vad=vad_instance,
+            stt=google.STT(),
+            llm=google.LLM(
+                model="gemini-2.5-flash",
+                temperature=0.6,
+            ),
+            tts=google.TTS(),
+            chat_ctx=initial_ctx,
+        )
+        agent.start(ctx.room, participant)
+        await agent.say(
+            "Hello! I am Tinkerbot, your ATL hardware lab mentor, created by Mohammad Daniyal Ahmad and Ridith Shetty. What circuit or microcontroller are you working on today?",
+            allow_interruptions=True,
+        )
 
 if __name__ == "__main__":
     start_health_server()
